@@ -192,6 +192,14 @@ GetISimpleAudioVolume(processName) {
     ComCall(3, pSessEnum, "int*", &count)
 
     targetPID := GetPIDByName(processName)
+    
+    ; ===== 【追加】PIDが0（見つからない）ならシステム音を巻き込まないよう即終了 =====
+    if (targetPID == 0) {
+        ObjRelease(pSessEnum)
+        return 0
+    }
+    ; ====================================================================================
+
     result    := 0
     guidSC2   := MakeGUID("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
     guidSAV   := MakeGUID("{87CE5498-68D6-44E5-9215-6DA47EF883D8}")
@@ -227,9 +235,25 @@ GetISimpleAudioVolume(processName) {
     return result
 }
 
+; ==============================================================================
+;  プロセス名から正確にPIDを取得する（空文字やシステム誤認対策）
+; ==============================================================================
 GetPIDByName(processName) {
-    for proc in ComObjGet("winmgmts:").ExecQuery(
-        "SELECT ProcessId FROM Win32_Process WHERE Name='" processName "'")
-        return proc.ProcessId
+    if (processName = "")
+        return 0
+    
+    ; 大文字小文字を区別せず、完全に一致するPIDを取得
+    pid := ProcessExist(processName)
+    if (pid)
+        return pid
+
+    ; 念のためのWMIフォールバック（既存の処理をより安全に強化）
+    try {
+        query := "SELECT ProcessId FROM Win32_Process WHERE Name='" processName "'"
+        for proc in ComObjGet("winmgmts:").ExecQuery(query) {
+            if (proc.ProcessId > 0)
+                return proc.ProcessId
+        }
+    }
     return 0
 }
