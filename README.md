@@ -8,7 +8,7 @@ This program controls the Windows sound-mixer's property to boost the volume. It
 * **`VolumeBoostSettings-EN.hta`**: The GUI settings panel(EN).
 
 ## How to Use
-1. Download `VolumeBoost.ahk` and `VolumeBoostSettings.hta` into the same folder.
+1. Download `VolumeBoost.ahk` or `VolumeBoostSettings-EN.hta` and `VolumeBoostSettings.hta` into the same folder.
 2. Run `VolumeBoost.ahk`first to make setting file.
 3. Open `VolumeBoostSettings.hta` to add target apps (e.g., `Microsoft.Media.Player.exe`), set a boost factor, and configure a hotkey.
 4. Press your setted hotkey to toggle the volume boost on/off.
