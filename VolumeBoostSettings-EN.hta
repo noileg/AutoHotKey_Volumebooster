@@ -1,0 +1,277 @@
+﻿﻿<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>VolumeBoost Settings</title>
+<HTA:APPLICATION
+    APPLICATIONNAME="VolumeBoost Settings"
+    ID="VolumeBoostSettings"
+    BORDER="dialog"
+    CAPTION="yes"
+    SHOWINTASKBAR="no"
+    SINGLEINSTANCE="yes"
+    SYSMENU="yes"
+    MAXIMIZEBUTTON="no"
+    MINIMIZEBUTTON="no"
+    SCROLL="auto"
+    SELECTION="no"
+    WINDOWSTATE="normal"
+/>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: "Yu Gothic UI", Meiryo, sans-serif; }
+body { background: #1e1e2e; color: #cdd6f4; padding: 20px; min-width: 500px; }
+h1 { font-size: 15px; font-weight: 600; color: #89b4fa; margin-bottom: 16px; }
+
+table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+thead th {
+  font-size: 11px; color: #a6adc8; text-align: left;
+  padding: 4px 6px; border-bottom: 1px solid #45475a;
+}
+tbody tr { border-bottom: 1px solid #313244; }
+tbody tr:hover { background: #26273a; }
+td { padding: 6px; vertical-align: middle; }
+
+input[type=text], input[type=number] {
+  width: 100%; padding: 5px 8px; background: #313244;
+  border: 1px solid #45475a; border-radius: 5px;
+  color: #cdd6f4; font-size: 12px; outline: none;
+}
+input:focus { border-color: #89b4fa; }
+input[readonly] { color: #a6adc8; cursor: default; }
+
+.col-proc   { width: 36%; }
+.col-factor { width: 12%; }
+.col-hk     { width: 24%; }
+.col-cap    { width: 16%; }
+.col-del    { width: 12%; }
+
+.btn-sm {
+  width: 100%; padding: 5px 4px; border: none; border-radius: 5px;
+  font-size: 11px; cursor: pointer; font-weight: 600;
+}
+.btn-capture { background: #45475a; color: #cdd6f4; }
+.btn-capture:hover { background: #585b70; }
+.btn-capture.listening { background: #f38ba8; color: #1e1e2e; }
+.btn-del { background: #45475a; color: #f38ba8; }
+.btn-del:hover { background: #f38ba8; color: #1e1e2e; }
+
+.btn-add {
+  padding: 7px 16px; background: #313244; border: 1px dashed #585b70;
+  border-radius: 6px; color: #a6adc8; font-size: 12px; cursor: pointer;
+  width: 100%; margin-bottom: 16px;
+}
+.btn-add:hover { border-color: #89b4fa; color: #89b4fa; }
+
+.actions { display: flex; gap: 8px; }
+.btn { flex: 1; padding: 9px; border: none; border-radius: 7px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn-save { background: #89b4fa; color: #1e1e2e; }
+.btn-save:hover { background: #b4d0f7; }
+.btn-cancel { background: #45475a; color: #cdd6f4; flex: 0 0 auto; padding: 9px 20px; }
+.btn-cancel:hover { background: #585b70; }
+
+.status { font-size: 11px; color: #a6e3a1; margin-top: 10px; min-height: 15px; text-align: center; }
+.hint { font-size: 10px; color: #6c7086; margin-top: 8px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<h1>&#9881; VolumeBoost Settings</h1>
+
+<table id="tbl">
+  <thead>
+    <tr>
+      <th class="col-proc">Target Process</th>
+      <th class="col-factor">Factor</th>
+      <th class="col-hk">Hotkey</th>
+      <th class="col-cap"></th>
+      <th class="col-del"></th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+
+<button class="btn-add" onclick="addRow()">&#43; Add App</button>
+
+<div class="actions">
+  <button class="btn btn-save"   onclick="saveSettings()">Save</button>
+  <button class="btn btn-cancel" onclick="cancelCapture(); window.close();">Cancel</button>
+</div>
+<div class="status" id="status"></div>
+<div class="hint">
+  &#x2022; Click "Input" then press a key, or type directly in AHK notation.<br>
+  &#x2022; Examples: !v = Alt+V / ^v = Ctrl+V / ^!v = Ctrl+Alt+V / +F1 = Shift+F1 / #v = Win+V<br>
+  &#x2022; Process names can be found in Task Manager's "Details" tab.
+</div>
+
+<script type="text/javascript">
+var INI_PATH = (function() {
+    var src = location.href.replace(/^file:\/{3}/, "").replace(/\//g, "\\");
+    return src.replace(/[^\\]+$/, "") + "VolumeBoost.ini";
+})();
+var fso = new ActiveXObject("Scripting.FileSystemObject");
+
+// 修飾キーのVKコード（単体では無視）
+var MOD_VKS = {16:1,17:1,18:1,91:1,92:1,160:1,161:1,162:1,163:1,164:1,165:1};
+// VK → AHKキー名テーブル
+var VK_MAP = {
+    8:"Backspace",9:"Tab",13:"Enter",19:"Pause",20:"CapsLock",
+    27:"Escape",32:"Space",33:"PgUp",34:"PgDn",35:"End",36:"Home",
+    37:"Left",38:"Up",39:"Right",40:"Down",45:"Insert",46:"Delete",
+    96:"Numpad0",97:"Numpad1",98:"Numpad2",99:"Numpad3",100:"Numpad4",
+    101:"Numpad5",102:"Numpad6",103:"Numpad7",104:"Numpad8",105:"Numpad9",
+    106:"NumpadMult",107:"NumpadAdd",109:"NumpadSub",110:"NumpadDot",111:"NumpadDiv",
+    112:"F1",113:"F2",114:"F3",115:"F4",116:"F5",117:"F6",
+    118:"F7",119:"F8",120:"F9",121:"F10",122:"F11",123:"F12",
+    186:";",187:"=",188:",",189:"-",190:".",191:"/",
+    192:"`",219:"[",220:"\\",221:"]",222:"'"
+};
+
+var capturingId   = null;
+var pendingMods   = {};
+var rowCount      = 0;
+
+// ── 修飾キーを keydown/keyup で常時追跡 ──────────────────────────────────────
+document.onkeydown = function(e) {
+    var vk = e.keyCode;
+    if (MOD_VKS[vk]) { pendingMods[vk] = true; return false; }
+    if (capturingId === null) return;
+    // Esc = キャンセル
+    if (vk === 27) { cancelCapture(); e.returnValue = false; return false; }
+
+    var mods = "";
+    if (pendingMods[91] || pendingMods[92]) mods += "#";
+    if (pendingMods[18] || pendingMods[164] || pendingMods[165]) mods += "!";
+    if (pendingMods[17] || pendingMods[162] || pendingMods[163]) mods += "^";
+    if (pendingMods[16] || pendingMods[160] || pendingMods[161]) mods += "+";
+
+    var key = VK_MAP[vk];
+    if (!key) {
+        if (vk >= 65 && vk <= 90)      key = String.fromCharCode(vk).toLowerCase();
+        else if (vk >= 48 && vk <= 57) key = String.fromCharCode(vk);
+        else                           key = "vk" + vk.toString(16);
+    }
+
+    var hkInput = document.getElementById("hk_" + capturingId);
+    if (hkInput) hkInput.value = mods + key;
+    finishCapture();
+    e.returnValue = false;
+    return false;
+};
+
+document.onkeyup = function(e) {
+    delete pendingMods[e.keyCode];
+    if (e.keyCode === 18 || e.keyCode === 164 || e.keyCode === 165) {
+        e.returnValue = false;
+        return false;
+    }
+};
+
+document.onsyskeydown = function(e) { return document.onkeydown(e); };
+document.onsyskeyup   = function(e) { return document.onkeyup(e); };
+
+function startCapture(btn, id) {
+    cancelCapture();   
+    capturingId = id;
+    pendingMods = {};
+    btn.className = "btn-sm btn-capture listening";
+    btn.innerText  = "Waiting...";
+}
+
+function finishCapture() {
+    resetCaptureUI();
+    capturingId = null;
+    pendingMods = {};
+}
+
+function cancelCapture() {
+    resetCaptureUI();
+    capturingId = null;
+    pendingMods = {};
+}
+
+function resetCaptureUI() {
+    var btns = document.querySelectorAll(".btn-capture");
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].className = "btn-sm btn-capture";
+        btns[i].innerText  = "Input";
+    }
+}
+
+// ── 行追加・削除 ──────────────────────────────────────────────────────────────
+function addRow(proc, factor, hk) {
+    proc   = proc   || "";
+    factor = factor !== undefined ? factor : "5";
+    hk     = hk     || "";
+    var id = rowCount++;
+    var tr = document.createElement("tr");
+    tr.id  = "row_" + id;
+    tr.innerHTML =
+        "<td class=\"col-proc\">"   + "<input type=\"text\"   id=\"proc_"   + id + "\" value=\"" + esc(proc)   + "\" placeholder=\"e.g., vlc.exe\"></td>" +
+        "<td class=\"col-factor\">" + "<input type=\"number\" id=\"factor_" + id + "\" value=\"" + esc(factor) + "\" min=\"1\" max=\"20\"></td>" +
+        "<td class=\"col-hk\">"     + "<input type=\"text\"   id=\"hk_"     + id + "\" value=\"" + esc(hk)     + "\" placeholder=\"e.g., !v\"></td>" +
+        "<td class=\"col-cap\">"    + "<button class=\"btn-sm btn-capture\" id=\"cap_" + id + "\" onclick=\"startCapture(this," + id + ")\">Input</button></td>" +
+        "<td class=\"col-del\">"    + "<button class=\"btn-sm btn-del\" onclick=\"delRow(" + id + ")\">Delete</button></td>";
+    document.getElementById("tbody").appendChild(tr);
+}
+
+function delRow(id) {
+    var row = document.getElementById("row_" + id);
+    if (row) row.parentNode.removeChild(row);
+}
+
+function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;"); }
+
+// ── INI 読み込み ──────────────────────────────────────────────────────────────
+function readINI() {
+    if (!fso.FileExists(INI_PATH)) { addRow(); return; }
+    try {
+        var f = fso.OpenTextFile(INI_PATH, 1, false, -1);
+        var lines = f.ReadAll().split(/\r?\n/);
+        f.Close();
+        var sec = null, entries = {}, order = [];
+        for (var i = 0; i < lines.length; i++) {
+            var l = lines[i].trim(), m;
+            if (m = l.match(/^\[(.+)\]$/)) {
+                sec = m[1]; order.push(sec); entries[sec] = {};
+            } else if (sec && (m = l.match(/^([^=]+)=(.*)/))) {
+                entries[sec][m[1].trim().toLowerCase()] = m[2].trim();
+            }
+        }
+        if (!order.length) { addRow(); return; }
+        for (var j = 0; j < order.length; j++) {
+            var e = entries[order[j]];
+            addRow(e["targetprocess"]||"", e["boostfactor"]||"5", e["hotkey"]||"");
+        }
+    } catch(ex) { addRow(); }
+}
+
+// ── INI 保存 ──────────────────────────────────────────────────────────────────
+function saveSettings() {
+    cancelCapture();
+    var rows = document.getElementById("tbody").rows;
+    if (!rows.length) { alert("No apps added."); return; }
+    var lines = "";
+    for (var i = 0; i < rows.length; i++) {
+        var id  = rows[i].id.replace("row_","");
+        var p   = document.getElementById("proc_"   + id).value.trim();
+        var fac = parseInt(document.getElementById("factor_" + id).value, 10);
+        var hk  = document.getElementById("hk_"    + id).value.trim();
+        if (!p)               { alert("Row " + (i+1) + ": Process name required."); return; }
+        if (isNaN(fac)||fac<1||fac>20) { alert("Row " + (i+1) + ": Factor must be 1-20."); return; }
+        if (!hk)              { alert("Row " + (i+1) + ": Hotkey required."); return; }
+        lines += "[Entry" + (i+1) + "]\r\nTargetProcess=" + p +
+                 "\r\nBoostFactor=" + fac + "\r\nHotkey=" + hk + "\r\n";
+    }
+    try {
+        var f = fso.CreateTextFile(INI_PATH, true, true);
+        f.Write(lines);
+        f.Close();
+        document.getElementById("status").innerText = "✓ Saved. Changes will be automatically applied.";
+        setTimeout(function(){ window.close(); }, 900);
+    } catch(ex) { alert("Save failed: " + ex.message); }
+}
+
+window.onload = function() { window.resizeTo(540, 420); readINI(); };
+</script>
+</body>
+</html>
