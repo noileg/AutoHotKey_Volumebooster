@@ -4,7 +4,8 @@ This program controls the Windows sound-mixer's property to boost the volume. It
 
 ## Files
 * **`VolumeBoost.ahk`**: The background script (AutoHotkey v2).
-* **`VolumeBoostSettings.hta`**: The GUI settings panel.
+* **`VolumeBoostSettings.hta`**: The GUI settings panel(JP).
+* **`VolumeBoostSettings-EN.hta`**: The GUI settings panel(EN).
 
 ## How to Use
 1. Download `VolumeBoost.ahk` and `VolumeBoostSettings.hta` into the same folder.
