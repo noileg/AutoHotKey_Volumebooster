@@ -1,6 +1,6 @@
 ; ==============================================================================
 ;  VolumeBoost.ahk  –  常駐本体 (AutoHotkey v2)
-;  複数アプリ対応 ＋ 終了時音量の自動保存・自動復元機能付き
+;  複数アプリ対応 ＋ 終了時音量の自動保存・自動復元機能付き (完全検証・堅牢版)
 ; ==============================================================================
 #Requires AutoHotkey v2.0
 #SingleInstance Force
@@ -12,7 +12,7 @@ global g_iniStamp := 0
 
 LoadINI()
 SetTimer(WatchINI, 2000)
-SetTimer(WatchProcesses, 500) ; 追加: 0.5秒間隔でプロセスと音量を監視
+SetTimer(WatchProcesses, 500) ; 0.5秒間隔でプロセスと音量を監視
 
 ; ==============================================================================
 ;  INI 読み込み
@@ -41,16 +41,17 @@ LoadINI() {
         if (!proc || !hk)
             continue
             
-        ; 管理用パラメータ（sec, sessionActive, lastVol）を追加
+        ; 管理用パラメータ (restoreAttempts: アプリ初期化時の音量上書きをねじ伏せるためのカウンタ)
         entry := {sec: sec, process: proc, factor: factor, hotkey: hk,
-                  boosting: false, saved: -1.0, sessionActive: false, lastVol: -1.0}
+                  boosting: false, saved: -1.0, sessionActive: false, lastVol: -1.0, 
+                  restoreAttempts: 0, targetDefVol: 0.0}
         g_entries.Push(entry)
         RegisterHotkey(entry)
     }
 }
 
 ; ==============================================================================
-;  音量の自動保存＆復元ループ (プロセス監視)
+;  音量の自動保存＆復元ループ (オーディオセッション逆引き監視)
 ; ==============================================================================
 WatchProcesses() {
     global INI_PATH, g_iniStamp
@@ -58,32 +59,36 @@ WatchProcesses() {
         vol := GetAppVolume(e.process)
         
         if (vol != -1) {
-            ; プロセス（オーディオセッション）が起動中の場合
+            ; ミキサー（オーディオセッション）にアプリが存在している場合
             if (!e.sessionActive) {
-                ; ■たった今起動した（前回まで落ちていた）場合
+                ; ■再生が開始され、ミキサーに「たった今出現した」瞬間
                 e.sessionActive := true
                 defVol := IniRead(INI_PATH, e.sec, "DefaultVolume", "")
                 if (defVol != "") {
-                    ; 保存されていた前回の音量に強制上書き（100%リセット対策）
-                    SetAppVolume(e.process, Float(defVol))
-                }
-            } else {
-                ; ■起動中の場合：ブースト中でなければ現在の音量を常に記憶する
-                if (!e.boosting) {
-                    e.lastVol := vol
+                    e.targetDefVol := Float(defVol)
+                    e.restoreAttempts := 4 ; アプリ自身の初期化上書きを防ぐため、今後2秒間(4回)強制適用する
                 }
             }
+            
+            ; 復元（強制適用）モード中
+            if (e.restoreAttempts > 0) {
+                SetAppVolume(e.process, e.targetDefVol)
+                e.restoreAttempts--
+            } 
+            ; 通常の監視モード（ブースト中でなければ音量を記憶）
+            else if (!e.boosting) {
+                e.lastVol := vol
+            }
         } else {
-            ; プロセスが落ちている場合
+            ; ミキサーにアプリが存在しない場合
             if (e.sessionActive) {
-                ; ■たった今閉じた（終了した）場合
+                ; ■ミキサーから消えた瞬間
                 e.sessionActive := false
-                e.boosting := false ; ブースト状態もリセット
+                e.boosting := false
+                e.restoreAttempts := 0
                 if (e.lastVol > 0) {
-                    ; 閉じる直前の「通常音量」をINIに保存
+                    ; 消える直前の「通常音量」をINIに保存
                     IniWrite(Round(e.lastVol, 4), INI_PATH, e.sec, "DefaultVolume")
-                    
-                    ; INIファイルが更新されたことでWatchINIが誤爆ループするのを防ぐため、スタンプを同期
                     g_iniStamp := FileGetTime(INI_PATH, "M")
                 }
             }
@@ -113,7 +118,6 @@ WatchINI() {
 ; ==============================================================================
 RegisterHotkey(entry) {
     try Hotkey(entry.hotkey, MakeToggleFn(entry), "On")
-
     MakeToggleFn(e) {
         return (*) => DoToggle(e)
     }
@@ -123,9 +127,11 @@ RegisterHotkey(entry) {
 ;  ブーストトグル
 ; ==============================================================================
 DoToggle(e) {
+    e.restoreAttempts := 0 ; 手動操作が自動復元に上書きされないようキャンセル
+
     if !e.boosting {
         vol := GetAppVolume(e.process)
-        if (vol <= 0.0)   ; 0 または取得失敗 → 弾く
+        if (vol <= 0.0)
             return
         e.saved    := vol
         e.boosting := true
@@ -134,12 +140,12 @@ DoToggle(e) {
         e.boosting := false
         if (e.saved > 0.0)
             SetAppVolume(e.process, e.saved)
-        e.saved := -1.0   ; リセット
+        e.saved := -1.0
     }
 }
 
 ; ==============================================================================
-;  Core Audio API
+;  Core Audio API (完全版：PID推測を廃止し、セッションからプロセス名を逆引き)
 ; ==============================================================================
 MakeGUID(str) {
     buf := Buffer(16, 0)
@@ -148,112 +154,135 @@ MakeGUID(str) {
 }
 
 GetAppVolume(processName) {
-    iVol := GetISimpleAudioVolume(processName)
-    if !iVol
+    if (processName = "")
         return -1
-    vol := 0.0
-    hr  := ComCall(4, iVol, "float*", &vol)
-    ObjRelease(iVol)
-    return (hr = 0) ? vol : -1
-}
 
-SetAppVolume(processName, level) {
-    iVol := GetISimpleAudioVolume(processName)
-    if !iVol
-        return false
-    hr := ComCall(3, iVol, "float", Max(0.0, Min(1.0, level)), "ptr", 0)
-    ObjRelease(iVol)
-    return (hr = 0)
-}
-
-GetISimpleAudioVolume(processName) {
-    pEnum := ComObject(
-        "{BCDE0395-E52F-467C-8E3D-C4579291692E}",
-        "{A95664D2-9614-4F35-A746-DE8DB63617E6}"
-    )
+    pEnum := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")
     pDevice := 0
     if (ComCall(4, pEnum, "int", 0, "int", 1, "ptr*", &pDevice) != 0 || !pDevice)
-        return 0
+        return -1
 
     guidSM2 := MakeGUID("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")
-    pSM2    := 0
-    hr      := ComCall(3, pDevice, "ptr", guidSM2, "uint", 1, "ptr", 0, "ptr*", &pSM2)
+    pSM2 := 0
+    hr := ComCall(3, pDevice, "ptr", guidSM2, "uint", 1, "ptr", 0, "ptr*", &pSM2)
     ObjRelease(pDevice)
     if (hr != 0 || !pSM2)
-        return 0
+        return -1
 
     pSessEnum := 0
     hr := ComCall(5, pSM2, "ptr*", &pSessEnum)
     ObjRelease(pSM2)
     if (hr != 0 || !pSessEnum)
-        return 0
+        return -1
 
     count := 0
     ComCall(3, pSessEnum, "int*", &count)
 
-    targetPID := GetPIDByName(processName)
-    
-    ; ===== 【追加】PIDが0（見つからない）ならシステム音を巻き込まないよう即終了 =====
-    if (targetPID == 0) {
-        ObjRelease(pSessEnum)
-        return 0
-    }
-    ; ====================================================================================
-
-    result    := 0
-    guidSC2   := MakeGUID("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
-    guidSAV   := MakeGUID("{87CE5498-68D6-44E5-9215-6DA47EF883D8}")
+    result := -1
+    guidSC2 := MakeGUID("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
+    guidSAV := MakeGUID("{87CE5498-68D6-44E5-9215-6DA47EF883D8}")
 
     loop count {
         pCtrl := 0
         ComCall(4, pSessEnum, "int", A_Index - 1, "ptr*", &pCtrl)
         if !pCtrl
             continue
-    
+
         pCtrl2 := 0
         ComCall(0, pCtrl, "ptr", guidSC2, "ptr*", &pCtrl2)
         ObjRelease(pCtrl)
         if !pCtrl2
             continue
+        
         pid := 0
         ComCall(14, pCtrl2, "uint*", &pid)
-        if (pid = targetPID) {
-            pVol := 0
-     
-            ComCall(0, pCtrl2, "ptr", guidSAV, "ptr*", &pVol)
-            ObjRelease(pCtrl2)
-            if pVol {
-                result := pVol
+        
+        ; セッションのPIDからプロセス名を直接取得して比較する（システム音のPID:0も弾く）
+        if (pid > 0) {
+            sName := ""
+            try sName := ProcessGetName(pid)
+            if (sName = processName) {
+                pVol := 0
+                ComCall(0, pCtrl2, "ptr", guidSAV, "ptr*", &pVol)
+                if pVol {
+                    vol := 0.0
+                    if (ComCall(4, pVol, "float*", &vol) == 0)
+                        result := vol
+                    ObjRelease(pVol)
+                }
+                ObjRelease(pCtrl2)
                 break
             }
-        } else {
-            ObjRelease(pCtrl2)
         }
+        ObjRelease(pCtrl2)
     }
 
     ObjRelease(pSessEnum)
     return result
 }
 
-; ==============================================================================
-;  プロセス名から正確にPIDを取得する（空文字やシステム誤認対策）
-; ==============================================================================
-GetPIDByName(processName) {
+SetAppVolume(processName, level) {
     if (processName = "")
-        return 0
-    
-    ; 大文字小文字を区別せず、完全に一致するPIDを取得
-    pid := ProcessExist(processName)
-    if (pid)
-        return pid
+        return false
 
-    ; 念のためのWMIフォールバック（既存の処理をより安全に強化）
-    try {
-        query := "SELECT ProcessId FROM Win32_Process WHERE Name='" processName "'"
-        for proc in ComObjGet("winmgmts:").ExecQuery(query) {
-            if (proc.ProcessId > 0)
-                return proc.ProcessId
+    pEnum := ComObject("{BCDE0395-E52F-467C-8E3D-C4579291692E}", "{A95664D2-9614-4F35-A746-DE8DB63617E6}")
+    pDevice := 0
+    if (ComCall(4, pEnum, "int", 0, "int", 1, "ptr*", &pDevice) != 0 || !pDevice)
+        return false
+
+    guidSM2 := MakeGUID("{77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}")
+    pSM2 := 0
+    hr := ComCall(3, pDevice, "ptr", guidSM2, "uint", 1, "ptr", 0, "ptr*", &pSM2)
+    ObjRelease(pDevice)
+    if (hr != 0 || !pSM2)
+        return false
+
+    pSessEnum := 0
+    hr := ComCall(5, pSM2, "ptr*", &pSessEnum)
+    ObjRelease(pSM2)
+    if (hr != 0 || !pSessEnum)
+        return false
+
+    count := 0
+    ComCall(3, pSessEnum, "int*", &count)
+
+    success := false
+    guidSC2 := MakeGUID("{BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D}")
+    guidSAV := MakeGUID("{87CE5498-68D6-44E5-9215-6DA47EF883D8}")
+    safeLevel := Max(0.0, Min(1.0, level))
+
+    loop count {
+        pCtrl := 0
+        ComCall(4, pSessEnum, "int", A_Index - 1, "ptr*", &pCtrl)
+        if !pCtrl
+            continue
+
+        pCtrl2 := 0
+        ComCall(0, pCtrl, "ptr", guidSC2, "ptr*", &pCtrl2)
+        ObjRelease(pCtrl)
+        if !pCtrl2
+            continue
+        
+        pid := 0
+        ComCall(14, pCtrl2, "uint*", &pid)
+        
+        ; 該当するすべてのセッションに音量を適用する
+        if (pid > 0) {
+            sName := ""
+            try sName := ProcessGetName(pid)
+            if (sName = processName) {
+                pVol := 0
+                ComCall(0, pCtrl2, "ptr", guidSAV, "ptr*", &pVol)
+                if pVol {
+                    if (ComCall(3, pVol, "float", safeLevel, "ptr", 0) == 0)
+                        success := true
+                    ObjRelease(pVol)
+                }
+            }
         }
+        ObjRelease(pCtrl2)
     }
-    return 0
+
+    ObjRelease(pSessEnum)
+    return success
 }
